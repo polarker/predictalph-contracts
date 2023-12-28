@@ -1,13 +1,12 @@
 Contract Predictalph (
     punterTemplateId: ByteVec,
     roundTemplateId: ByteVec,
-    dynamicArrayForIntId: ByteVec,
     mut epoch: U256,
     mut operator: Address,
     mut feesBasisPts: U256,
     mut repeatEvery: U256,
     mut claimedByAnyoneDelay: U256     
-) {
+) extends DynamicArrayForInt() {
 
     event BetBull(from: Address, epoch: U256, amount: U256, up: Bool, claimedByAnyoneTimestamp: U256)
     event BetBear(from: Address, epoch: U256, amount: U256, up: Bool, claimedByAnyoneTimestamp: U256)
@@ -15,18 +14,23 @@ Contract Predictalph (
     event RoundStarted(epoch: U256, price: U256)
     event Claimed(punterAddress: Address, from:Address, amount: U256, epoch: U256)
 
-enum ErrorCodes {
-    PunterNotExists = 1
-    InvalidPunterAddress = 2
-    InvalidCaller = 3
-    BidTimestampReached = 4
-    RoundAlreadyRunning = 5
-    RoundDidntEnd = 6
-    RoundNotExists = 7
-    AlreadyPlayed = 8
-    NotEnoughAlph = 9
-    CannotBeClaimedYet = 10
-  }
+    enum ErrorCodes {
+        PunterNotExists = 1
+        InvalidPunterAddress = 2
+        InvalidCaller = 3
+        BidTimestampReached = 4
+        RoundAlreadyRunning = 5
+        RoundDidntEnd = 6
+        RoundNotExists = 7
+        AlreadyPlayed = 8
+        NotEnoughAlph = 9
+        CannotBeClaimedYet = 10
+    }
+
+    enum SubContractTypes {
+        Round = #00
+        Punter = #01
+    }
 
   
   //fn getBetInfo(from: Address) -> (Punter) {
@@ -36,29 +40,28 @@ enum ErrorCodes {
    // return Punter(bidderContractId)
 //}
 
-    fn getRound() -> (Round) {
-        let epochContractId = subContractId!(#00 ++ u256To4Byte!(epoch))
-        emit Debug(`Round contract id ${epochContractId}`)
-        assert!(contractExists!(epochContractId), ErrorCodes.RoundNotExists)
+    fn getCurrentRound() -> (Round) {
+        let roundContractId = subContractId!(SubContractTypes.Round ++ u256To4Byte!(epoch))
+        emit Debug(`Round contract id ${roundContractId}`)
+        assert!(contractExists!(roundContractId), ErrorCodes.RoundNotExists)
 
-        return Round(epochContractId)
+        return Round(roundContractId)
     }
 
     fn getRoundByEpoch(epochToGet: ByteVec) -> (Round) {
-        let epochContractId = subContractId!(#00 ++ epochToGet)
-        emit Debug(`Round contract id ${epochContractId}`)
-        assert!(contractExists!(epochContractId), ErrorCodes.RoundNotExists)
+        let roundContractId = subContractId!(SubContractTypes.Round ++ epochToGet)
+        emit Debug(`Round contract id ${roundContractId}`)
+        assert!(contractExists!(roundContractId), ErrorCodes.RoundNotExists)
 
-        return Round(epochContractId)
+        return Round(roundContractId)
     }
 
     fn getBetInfoByEpoch(from: Address, epochToGet: ByteVec) -> Punter {
-        let bidderContractId = subContractId!(#01 ++ toByteVec!(from) ++ epochToGet)
+        let bidderContractId = subContractId!(SubContractTypes.Punter ++ toByteVec!(from) ++ epochToGet)
         assert!(contractExists!(bidderContractId), ErrorCodes.PunterNotExists)
     
         return Punter(bidderContractId)
     }
-
 
     @using(updateFields = false, preapprovedAssets = true, checkExternalCaller = true)
     pub fn startRound(price: U256) -> (){
@@ -66,17 +69,16 @@ enum ErrorCodes {
 
         checkCaller!(caller == operator, ErrorCodes.InvalidCaller)
 
-        let epochContractId = #00 ++ u256To4Byte!(epoch)
+        let roundContractPath = SubContractTypes.Round ++ u256To4Byte!(epoch)
 
-        assert!(!contractExists!(subContractId!(epochContractId)), ErrorCodes.RoundAlreadyRunning)
-        emit Debug(`Round contract id ${epochContractId}`)
+        assert!(!contractExists!(subContractId!(roundContractPath)), ErrorCodes.RoundAlreadyRunning)
+        emit Debug(`Round contract id ${roundContractPath}`)
         emit Debug(`Actual epoch is ${epoch} with start price ${price}`)
 
         let bidTimestampEnd = blockTimeStamp!() + repeatEvery
         let (encodedImmFields, encodedMutFields) = Round.encodeFields!(selfContract!(), epoch, price,feesBasisPts,bidTimestampEnd, operator,false,0 ,0 ,0 ,0 ,0, 0, 0, 0)
 
-
-       copyCreateSubContract!{caller -> ALPH: 1 alph}(epochContractId, roundTemplateId, encodedImmFields, encodedMutFields)
+        copyCreateSubContract!{caller -> ALPH: 1 alph}(roundContractPath, roundTemplateId, encodedImmFields, encodedMutFields)
         emit RoundStarted(epoch, price)
     }
 
@@ -86,7 +88,7 @@ enum ErrorCodes {
 
         checkCaller!(caller == operator, ErrorCodes.InvalidCaller)
 
-        let round = getRound()
+        let round = getCurrentRound()
         let endRoundTimestamp = round.getEndRoundTime()
 
         assert!(endRoundTimestamp <= blockTimeStamp!(), ErrorCodes.RoundDidntEnd)
@@ -101,15 +103,15 @@ enum ErrorCodes {
     pub fn bid(amount: U256, up: Bool) -> (){
         let caller = callerAddress!()
 
-        let round = getRound()
+        let round = getCurrentRound()
         let endRoundTimestamp = round.getEndRoundTime()
         let timestampNow = blockTimeStamp!()
         assert!(timestampNow < endRoundTimestamp, ErrorCodes.BidTimestampReached)
         assert!(isAssetAddress!(caller), ErrorCodes.InvalidPunterAddress)
         assert!(amount >= 1 alph, ErrorCodes.NotEnoughAlph)
 
-        // use address for th path to be able to find it back 
-        let bidderContractId =  #01 ++ toByteVec!(caller) ++ u256To4Byte!(epoch)
+        // use address for the path to be able to find it back 
+        let bidderContractId =  SubContractTypes.Punter ++ toByteVec!(caller) ++ u256To4Byte!(epoch)
 
         // user never played, create contract
         assert!(!contractExists!(subContractId!(bidderContractId)), ErrorCodes.AlreadyPlayed)
@@ -134,36 +136,33 @@ enum ErrorCodes {
     @using(checkExternalCaller = false)
     pub fn withdraw(arrayEpochIn: ByteVec) -> () {
         let caller = callerAddress!()
-        let dynamicArray = DynamicArrayForInt(dynamicArrayForIntId)
 
         for (let mut index = 0; index < size!(arrayEpochIn)/4; index = index + 1) {
-            let epochNumber = dynamicArray.get(arrayEpochIn, index)
-            let epochContractId = subContractId!(#00 ++ epochNumber)
-            let betInfoContractId = subContractId!(#01 ++ toByteVec!(caller) ++ epochNumber)
-            assert!(contractExists!(epochContractId), ErrorCodes.RoundNotExists)
+            let epochNumber = getArrayElem(arrayEpochIn, index)
+            let roundContractId = subContractId!(SubContractTypes.Round ++ epochNumber)
+            let betInfoContractId = subContractId!(SubContractTypes.Punter ++ toByteVec!(caller) ++ epochNumber)
+
+            assert!(contractExists!(roundContractId), ErrorCodes.RoundNotExists)
             assert!(contractExists!(betInfoContractId), ErrorCodes.PunterNotExists)
 
-            if(contractExists!(epochContractId) && contractExists!(betInfoContractId)){
-                let betInfoCaller = getBetInfoByEpoch(caller, epochNumber)
-                
-                let addressPunter = betInfoCaller.getAddress()
-                checkCaller!(caller == addressPunter, ErrorCodes.InvalidCaller)
-                
+            let betInfoCaller = getBetInfoByEpoch(caller, epochNumber)
+            
+            let addressPunter = betInfoCaller.getAddress()
+            checkCaller!(caller == addressPunter, ErrorCodes.InvalidCaller)
+            
 
-                let amountPunter = betInfoCaller.getAmountBid()
-                let upBid = betInfoCaller.getBid()
+            let amountPunter = betInfoCaller.getAmountBid()
+            let upBid = betInfoCaller.getBid()
 
-                let round = getRoundByEpoch(epochNumber)
+            let round = getRoundByEpoch(epochNumber)
 
-                // cannot claim if the round didnt end 
+            // cannot claim if the round didnt end 
 
-                round.userClaimRewards(addressPunter, amountPunter, upBid)
-                betInfoCaller.destroy()
+            round.userClaimRewards(addressPunter, amountPunter, upBid)
+            betInfoCaller.destroy()
 
-                // emit who call and with and which punter it concerned
-                emit Claimed(addressPunter ,caller ,amountPunter, u256From4Byte!(epochNumber))
-
-            }
+            // emit who call and with and which punter it concerned
+            emit Claimed(addressPunter ,caller ,amountPunter, u256From4Byte!(epochNumber))
         }
     }
 
@@ -171,17 +170,16 @@ enum ErrorCodes {
     @using(checkExternalCaller = false)
     pub fn withdrawAddress(arrayEpochIn: ByteVec, addressToClaim: Address) -> () {
         let caller = callerAddress!()
-        let dynamicArray = DynamicArrayForInt(dynamicArrayForIntId)
         let timestampNow = blockTimeStamp!()
 
         for (let mut index = 0; index < size!(arrayEpochIn)/4; index = index + 1) {
-            let epochNumber = dynamicArray.get(arrayEpochIn, index)
-            let epochContractId = subContractId!(#00 ++ epochNumber)
-            let betInfoContractId = subContractId!(#01 ++ toByteVec!(addressToClaim) ++ epochNumber)
-            assert!(contractExists!(epochContractId), ErrorCodes.RoundNotExists)
+            let epochNumber = getArrayElem(arrayEpochIn, index)
+            let roundContractId = subContractId!(SubContractTypes.Round ++ epochNumber)
+            let betInfoContractId = subContractId!(SubContractTypes.Punter ++ toByteVec!(addressToClaim) ++ epochNumber)
+            assert!(contractExists!(roundContractId), ErrorCodes.RoundNotExists)
             assert!(contractExists!(betInfoContractId), ErrorCodes.PunterNotExists)
 
-            if(contractExists!(epochContractId) && contractExists!(betInfoContractId)){
+            if(contractExists!(roundContractId) && contractExists!(betInfoContractId)){
                 let betInfoCaller = getBetInfoByEpoch(addressToClaim, epochNumber)
                 
                 let addressPunter = betInfoCaller.getAddress()
@@ -219,13 +217,11 @@ enum ErrorCodes {
     pub fn destroyRound(epochArray: ByteVec) -> (){
         checkCaller!(callerAddress!() == operator, ErrorCodes.InvalidCaller)
 
-        let dynamicArray = DynamicArrayForInt(dynamicArrayForIntId) 
-
         for (let mut index = 0; index < size!(epochArray)/4; index = index + 1) {
-            let epochNumber = dynamicArray.get(epochArray, index)
+            let epochNumber = getArrayElem(epochArray, index)
 
-            let epochContractId = subContractId!(#00 ++ epochNumber)
-            if (contractExists!(epochContractId)){
+            let roundContractId = subContractId!(SubContractTypes.Round ++ epochNumber)
+            if (contractExists!(roundContractId)){
                 let round = getRoundByEpoch(epochNumber)
                 round.destroy()
             }

@@ -38,6 +38,8 @@ Contract Punter(
         destroySelf!(punterAddress)
     }
 
+    // Not sure you want to charge a bit fee in this case, to cover the gas fee for example
+    // It's fine in this way for the first version I think
     @using(assetsInContract = true)
     pub fn destroyByOther(from: Address) -> (){
         checkCaller!(callerContractId!() == contractId!(prediction), ErrorCodes.InvalidCaller)
